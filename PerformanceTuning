@@ -1,0 +1,123 @@
+Performance Tuning:
+
+Isolating CPUs:
+To give application threads the most execution time possible, you can isolate CPUs, which means removing as many extraneous tasks off a CPU as possible.
+Isolating CPUs generally involves:
+
+ 1) removing all user-space threads;
+ 2) removing any unbound kernel threads (bound kernel threads are tied to a specific CPU and may not be moved);
+ 3) removing interrupts by modifying the /proc/irq/N/smp_affinity property of each Interrupt Request (IRQ) number N in the system. 
+ 
+Things to consider:
+1)If you have a multi-threaded application where threads need to communicate with one another by sharing cache,
+  then they may need to be kept on the same NUMA node or physical socket. 
+2)If you run multiple unrelated real-time applications, then separating the CPUs by NUMA node or socket may be suitable.
+
+To show layout of available CPUs
+lstopo-no-graphics --no-io --no-legend --of txt
+
+numactl --hardware
+
+
+CPU Affinity
+
+Processor affinity, or CPU pinning, enables the binding and unbinding of a process or a thread to a central processing unit (CPU) or a range of CPUs,
+so that the process or thread will execute only on the designated CPU or CPUs rather than any CPU.
+This can be viewed as a modification of the native central queue scheduling algorithm in a symmetric multiprocessing operating system.
+Scheduling a process to execute on the same processor improves its performance by reducing performance-degrading events such as cache misses.
+
+Soft Affinity/Natural Affinity: tendency of a scheduler to try to keep processes on the same CPU as long as possible.
+It is merely an attempt by the scheduler.
+
+Hard Affinity: It is a requirement and scheduler must adhere to the specified affinity for a process.
+
+
+Benefits of CPU Affinity:
+1) Optimizing Cache Performance:
+Whenever a processor adds a line of data to its local cache, all the other processors in the system also caching it must invalidate that data.
+This invalidation is costly and unpleasant. When processes bounce between processors,they constantly cause cache invalidations, and the data they want is never in the cache when they need it.
+Thus, cache miss rates grow very large. CPU affinity protects against this and improves cache performance.
+
+2) Spatial Locality:
+If multiple threads are accessing the same data, it might make sense to bind them all to the same processor. Doing so guarantees that the threads do not contend over data and cause cache misses.
+This does diminish the performance gained from multithreading on SMP. If the threads are inherently serialized, however, the improved cache hit rate may be worth it.
+
+
+Affinity BitMask:
+CPU affinity (on 32-bit machines) is represented by a 32-bit bitmask.Each bit represents whether the given task is bound to the corresponding processor. 
+By default it is all 1's meaning process can run on any processor.
+
+Isolating CPU's from Scheduler:
+used to specify CPU's to be isolated from the general SMP balancing. Scheduler will not assign any task or process to the isolated CPU.
+isolcpus is the boot time parameter. To check the isocpus on a box
+
+cat /proc/cmdline
+BOOT_IMAGE=/vmlinuz-3.10.0-514.el7.x86_64 root=/dev/mapper/rootvg-rootlv ro crashkernel=auto rd.lvm.lv=rootvg/rootlv rd.lvm.lv=rootvg/swaplv rhgb quiet intel_idle.max_cstate=0 processor.max_cstate=1 intel_pstate=disable
+ isolcpus=7,8,9,10
+
+Edit /etc/default/grub and add your desired setting to the GRUB_CMDLINE_LINUX line (isolcpus=7,8,9,10)
+ 
+ 
+Once the system is booted with this parameter, processes/tasks will not be assigned to or from
+the specified CPU(s) until processes are assigned via the taskset or cset commands.On Linux, the taskset command can be used to set the CPU affinity of processes,
+and the cset command allows you to group CPUs and memory into logical entities and restrict processes to the
+resources of one or more of those logical entities. 
+
+Taskset:
+
+To check the CPU affinity of a process with taskset, use the command
+taskset -c -p <pid>
+
+To change the CPU affinity of a process with taskset, use the command
+taskset -c <CPU NUMBER> -p <PID>
+
+When using isolated CPUs, specifying more than one CPU with the taskset command
+will not result in an error, but only the first listed CPU will be used. Due to the nature of
+isolated CPUs, specifying multiple CPUs is ineffective
+
+Cpuset:
+
+Define a cpuset:
+
+# cset set --cpu <CPU> <CPUSET NAME>
+
+On NUMA machines, when using cset, it may be necessary to specify the memory nodes
+as well as the CPUs. The command numactl --hardware can be used to determine the
+desired memory nodes.
+
+
+Interrupt Handling:3
+view interrupts handled by a system
+cat /proc/interrupts
+
+One of the features of x86 architecture is ability to spread interrupts evenly among multiple cores. Benefits of such configuration seems to be obvious.
+Interrupts consume CPU time and by spreading them on all cores we avoid bottle-necks.
+Every x86 motherboard has a chip called IO-APIC. This is a device that controls interrupt delivery within your system. It knows how many CPUs are in your system and can direct various interrupts to various CPUs. It uses so called local APIC-ID as an identifier of the processor.
+It has two modes of operation.
+In one mode it sends interrupts from certain device to single, predefined core. This mode of operation called fixed/physical mode.
+In another mode, it can deliver interrupts from certain device to multiple cores. The later mode called logical/low priority interrupt delivery mode.
+
+Problem:
+Consider network interface card for example. Lets say we have a TCP connection to some host out there. When packet arrives, the network card issues an interrupt and IO-APIC directs it to one of the cores. Next, the core handing the packet should fetch the TCP connection objects from the memory to its cache.
+
+IO-APIC does not guarantee that next packet that belongs to the connection will be handled by the same core.
+So, it is likely that two cores will have to work with TCP connection object. Both of them will have to fetch its content into their cache.
+This will cause cache coherency problems (cache misses). And as you can learn from the article I’ve written on misaligned memory accesses, accessing memory that is not in cache can take up to 30 times more time than accessing cached RAM.
+
+By default in Linux on most system, all hardware interrupts end up getting serviced by CPU 0. This can result in bottlenecks and reduced performance.
+The solution is that on x86 you have an APIC that can divide interrupt processing among the cores using smp affinity to assign interrupts to different cores.
+
+In Linux you can use /proc/irq/*/smp_affinity to set a bitmask to control which cpu’s interrupts will go to. 
+The default is all bits set (some number of "f"’s depending on how many cpus you have) which should spread interrupts across all CPUs.
+You can determine which mode your IO-APIC is in by looking at what is reported in dmesg at boot.
+
+
+Irqbalance is the Linux utility tasked with making sure that interrupts from your hardware devices are handled in as efficient a manner as possible
+(meaning every cpu handles some of the interrupt work), while at the same time making sure that no single cpu is tasked with a inappropriately 
+large amount of this work. Irqbalance constantly analyzes the amount of work interrupts require on your system and balances interrupt handling 
+across all of your systems cpus in a fair manner, keeping system performance more predictable and constant.
+This should all happen transparently to the user. If irqbalance performs its job right, nobody will ever notice it's there or want to turn it off.
+
+
+Tuning Network interrupts based on NUMA configuration:
+
