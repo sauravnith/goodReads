@@ -1,0 +1,31 @@
+TCPDUMP utility
+
+Show interfaces on a box
+      tcpdump -D
+
+Listen on specific interface
+      tcpdump -i eth0
+
+Find packets for a specific address
+      tcpdump -i em1  | grep "239.31.82.79"
+
+Do not convert address to names 
+      tcpdump -i em1 -nnn | grep "239.31.82.79"
+
+Disable promiscuous mode. (allows a NIC to receive all traffic on the network, even if it is not addressed to this NIC)
+      tcpdump -i em1 -nnn -p | grep "239.31.82.79"
+
+Print packet in ASCII
+      tcpdump -A -i eth0
+
+Dump packet to a file
+      tcpdump -w file.pcap -i eth0
+
+Capture packets with readable timestamp
+      tcpdump -ttt -i eth0
+
+Receive packet flow on a particular port
+      tcpdump -i eth0 port 22001
+
+Receive packet flow for particular destination host and port
+      tcpdump -i eth0 dst 239.31.82.79 and port 22001
